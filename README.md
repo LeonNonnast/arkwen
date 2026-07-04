@@ -52,7 +52,7 @@ Der Entwurf ist vollständig in ADRs festgehalten (`docs/adr/`). Alle fünf Phas
 | --- | --- | --- |
 | 1 | Runtime-Adapter + Session-Modell | [ADR-001](docs/adr/ADR-001.md), [002](docs/adr/ADR-002.md), [003](docs/adr/ADR-003.md), [004](docs/adr/ADR-004.md) |
 | 2 | Lifecycle + Events + Quality Gates | [ADR-003](docs/adr/ADR-003.md), [005](docs/adr/ADR-005.md) |
-| 3 | Workcell-Isolation + Secrets | [ADR-006](docs/adr/ADR-006.md) |
+| 3 | Workcell-Isolation + Contract-Plane-AuthZ + Secrets | [ADR-006](docs/adr/ADR-006.md), [ADR-010](docs/adr/ADR-010.md) |
 | 4 | Warehouse + Blueprints | [ADR-007](docs/adr/ADR-007.md) |
 | 5 | Outer-Loop-Contract (Control Plane) | [ADR-008](docs/adr/ADR-008.md) |
 | — | Cross-Phase Reconciliation & Closure | [ADR-009](docs/adr/ADR-009.md) |
