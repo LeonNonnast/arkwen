@@ -61,6 +61,8 @@ Siehe auch [`docs/ARCHITECTURE-OVERVIEW.md`](docs/ARCHITECTURE-OVERVIEW.md), [`d
 
 **Implementierung:** [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) — slice-basierter Build-Plan (S0…S6). Vertiefte ADR-Fassungen mit vollen Threat-Models: [`docs/adr/long-form/`](docs/adr/long-form/).
 
+**Wire-Contracts (contract-first, single source of truth):** [`proto/arkwen/v1/`](proto/arkwen/v1/) — protobuf für Event-Envelope, Adapter-Contract, Outer-Loop Control-Plane & Seeds. Guide: [`docs/CONTRACTS.md`](docs/CONTRACTS.md). Conformance-Vektoren (die 10 Invarianten als Tests): [`conformance/`](conformance/).
+
 ## Die zehn Invarianten
 
 Als durchgängiger Prüfmaßstab über alle ADRs:

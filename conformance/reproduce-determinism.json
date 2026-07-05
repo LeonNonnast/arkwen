@@ -1,0 +1,64 @@
+{
+  "vector": "reproduce-determinism",
+  "adr": ["ADR-001", "ADR-007 E6", "ADR-009 R1"],
+  "invariants": [6, 8],
+  "description": "reproduce(run_id) resolves every RunSeed field to bytes. Because identity == digest, two resolutions of the same snapshot-mode seed yield byte-identical inputs (Invariant 6). A mount-mode seed is explicitly NOT bit-reproducible and its reproduce output is classified DEGRADED — a RESULT classification, never a lifecycle or terminal STATE (Invariant 8). The seed is frozen at run.created and never re-resolved.",
+  "conventions": "canonical proto3 JSON. run-A and run-B are the run.created payloads; resolvedInputs models reproduce() output (not a wire message — DEGRADED deliberately lives outside the wire enums).",
+  "given": {
+    "runA_created": {
+      "runId": "run-A", "seq": "0", "schemaVersion": 1, "timestamp": "2026-07-05T09:00:00Z", "type": "EVENT_TYPE_RUN_CREATED",
+      "runCreated": {
+        "createdBy": {"type": "PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER", "principalId": "consumer-01", "tenantId": "acme"},
+        "seed": {
+          "missionHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "9f2c1d7a3e5b8c04f16d2a9b7c3e0d5f8a1b2c3d4e5f60718293a4b5c6d7e8f9"},
+          "imageDigest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "3b0e7c9a1d4f6082b5c7e9a1d3f5072a4c6e8091b3d5f7092a4c6e8b0d2f4a61"},
+          "toolkitVersions": [{"name": "webapp", "digest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "7c1e3a5d7f90b2c4e6081a3c5e7092b4d6f8010293a5c7e9b1d3f507294a6c8e"}}],
+          "workbenchBaseCommit": "e3f1a2b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0",
+          "workbenchSnapshotRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"},
+          "materializationMode": "MATERIALIZATION_MODE_SNAPSHOT",
+          "adapterVersion": "cell-shim/1.4.2",
+          "policyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff1"},
+          "sessionSeed": "7b1e9f04-2c3a-4d5e-8f60-112233445566",
+          "blueprintDigest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "dead1234beef5678cafe9abcf00d0def123456789abcdef00fedcba987654321"},
+          "isolationContractRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "5a5b5c5d5e5f60616263646566676869707172737475767778797a7b7c7d7e7f"},
+          "tenantId": "acme",
+          "authzPolicyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "11aa22bb33cc44dd55ee66ff778800aa99bb11cc22dd33ee44ff550066778899"}
+        }
+      }
+    },
+    "runB_created": {
+      "runId": "run-B", "seq": "0", "schemaVersion": 1, "timestamp": "2026-07-05T09:05:00Z", "type": "EVENT_TYPE_RUN_CREATED",
+      "runCreated": {
+        "createdBy": {"type": "PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER", "principalId": "consumer-01", "tenantId": "acme"},
+        "seed": {
+          "missionHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "9f2c1d7a3e5b8c04f16d2a9b7c3e0d5f8a1b2c3d4e5f60718293a4b5c6d7e8f9"},
+          "imageDigest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "3b0e7c9a1d4f6082b5c7e9a1d3f5072a4c6e8091b3d5f7092a4c6e8b0d2f4a61"},
+          "toolkitVersions": [{"name": "webapp", "digest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "7c1e3a5d7f90b2c4e6081a3c5e7092b4d6f8010293a5c7e9b1d3f507294a6c8e"}}],
+          "workbenchBaseCommit": "e3f1a2b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0",
+          "workbenchMountRef": "/mnt/live/acme/workbench-42",
+          "materializationMode": "MATERIALIZATION_MODE_MOUNT",
+          "adapterVersion": "cell-shim/1.4.2",
+          "policyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff1"},
+          "sessionSeed": "7b1e9f04-2c3a-4d5e-8f60-112233445566",
+          "tenantId": "acme"
+        }
+      }
+    },
+    "reproduceRunA_pass1": {"resolvedInputs": {"mission": "9f2c1d7a3e5b8c04f16d2a9b7c3e0d5f8a1b2c3d4e5f60718293a4b5c6d7e8f9", "image": "3b0e7c9a1d4f6082b5c7e9a1d3f5072a4c6e8091b3d5f7092a4c6e8b0d2f4a61", "workbench": "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00", "toolkit.webapp": "7c1e3a5d7f90b2c4e6081a3c5e7092b4d6f8010293a5c7e9b1d3f507294a6c8e", "sessionSeed": "7b1e9f04-2c3a-4d5e-8f60-112233445566"}, "classification": "REPRODUCED"},
+    "reproduceRunA_pass2": {"resolvedInputs": {"mission": "9f2c1d7a3e5b8c04f16d2a9b7c3e0d5f8a1b2c3d4e5f60718293a4b5c6d7e8f9", "image": "3b0e7c9a1d4f6082b5c7e9a1d3f5072a4c6e8091b3d5f7092a4c6e8b0d2f4a61", "workbench": "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00", "toolkit.webapp": "7c1e3a5d7f90b2c4e6081a3c5e7092b4d6f8010293a5c7e9b1d3f507294a6c8e", "sessionSeed": "7b1e9f04-2c3a-4d5e-8f60-112233445566"}, "classification": "REPRODUCED"},
+    "reproduceRunB": {"classification": "DEGRADED", "reason": "materializationMode MOUNT (workbenchMountRef) is not bit-reproducible per ADR-007 E6"},
+    "lifecycleStateNames": ["LIFECYCLE_STATE_UNSPECIFIED", "LIFECYCLE_STATE_QUEUED", "LIFECYCLE_STATE_PROVISIONING", "LIFECYCLE_STATE_RUNNING", "LIFECYCLE_STATE_FINALIZING", "LIFECYCLE_STATE_COMPLETED", "LIFECYCLE_STATE_FAILED", "LIFECYCLE_STATE_CANCELED"],
+    "terminalStateNames": ["TERMINAL_STATE_UNSPECIFIED", "TERMINAL_STATE_COMPLETED", "TERMINAL_STATE_FAILED", "TERMINAL_STATE_CANCELED"],
+    "mustReject": {
+      "description": "a seed field carrying a floating channel alias instead of a resolved digest",
+      "badSeedFragment": {"workbenchSnapshotRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "channel:tested"}}
+    }
+  },
+  "assertions": [
+    {"id": "D1", "invariant": [6], "assert": "reproduceRunA_pass1.resolvedInputs == reproduceRunA_pass2.resolvedInputs field-by-field (identity == digest, so re-resolving the same seed yields byte-identical inputs)", "expect": "pass"},
+    {"id": "D2", "invariant": [6], "assert": "runA seed.sessionSeed equals the value resolved in both reproduce passes; the strict reproduce reuses the frozen sessionSeed rather than drawing a fresh one", "expect": "pass"},
+    {"id": "D3", "invariant": [6], "assert": "the mustReject seed fragment is invalid: workbenchSnapshotRef must be a resolved Digest, not a floating channel alias; ranges/channels are resolved exactly once at run.created and frozen (a channel string in a seed is rejected)", "expect": "reject"},
+    {"id": "D4", "invariant": [8], "assert": "reproduceRunB.classification == 'DEGRADED' and the string 'DEGRADED' is NOT a member of lifecycleStateNames nor terminalStateNames — DEGRADED annotates the reproduce result only, never a run state", "expect": "pass"},
+    {"id": "D5", "invariant": [6], "assert": "runB uses the workbench_baseline oneof branch workbenchMountRef (mutually exclusive with workbenchSnapshotRef) with materializationMode MATERIALIZATION_MODE_MOUNT — the mount branch is structurally the non-reproducible one", "expect": "pass"}
+  ]
+}

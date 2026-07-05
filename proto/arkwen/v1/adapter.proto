@@ -1,0 +1,163 @@
+// Arkwen wire contract — ADAPTER (Cell-Shim <-> Factory Controller), ADR-001.
+//
+// This is the tiered adapter contract. The Controller stays runtime-agnostic
+// (Invariant 1): it speaks ONLY these verbs, never a Claude-Code/OpenHands
+// special case. The Cell-Shim lives in the workcell (containerd-shim-v2 pattern)
+// and translates a worker's native behaviour into this protocol.
+//
+// TRANSPORT-AGNOSTIC (ADR-006): the identical protocol runs over a unix-domain
+// socket (runc/gVisor) or virtio-vsock (Firecracker strict tier). No verb
+// assumes a transport.
+//
+// TIERED (Invariant 9): the lifecycle + artifacts verbs are the unconditional
+// MUST contract; the KANN capabilities are declared via Negotiate and, when
+// absent, degrade OBSERVABILITY/control fidelity only — never the security floor.
+
+syntax = "proto3";
+
+package arkwen.v1;
+
+import "arkwen/v1/common.proto";
+import "arkwen/v1/events.proto";
+
+option go_package = "github.com/arkwen/arkwen/gen/go/arkwen/v1;arkwenv1";
+
+// ============================================================================
+// CellShimAdapter — the contract every worker adapter fulfils.
+// ============================================================================
+service CellShimAdapter {
+  // ---- Capability negotiation (ADR-001 / Invariant 9) ----
+  // The Controller announces the MUST contract it requires plus the KANN
+  // capabilities it would use; the shim replies with the capabilities it
+  // actually declares. Frozen early so KANN tiers are additive, never a rewrite.
+  rpc Negotiate(NegotiateRequest) returns (NegotiateResponse);
+
+  // ---- MUST: lifecycle (create · start · signal(cancel) · state · reap) ----
+  rpc Create(CreateRequest) returns (CreateResponse);
+  rpc Start(StartRequest) returns (StartResponse);
+  // Signal: CANCEL is the only unconditional MUST. PAUSE/RESUME require the
+  // declared CONTROL_PAUSE_RESUME capability; without it the shim degrades to
+  // workcell-boundary suspension (container freeze) — the paused overlay still
+  // holds, only resume fidelity differs (ADR-008 E2).
+  rpc Signal(ShimSignalRequest) returns (ShimSignalResponse);
+  rpc State(StateRequest) returns (StateResponse);
+  rpc Reap(ReapRequest) returns (ReapResponse);
+
+  // ---- MUST: artifacts (workbench diff + terminal state + reason) ----
+  rpc Artifacts(ArtifactsRequest) returns (ArtifactsResponse);
+
+  // ---- KANN: events.stream (declared capability EVENTS_STREAM) ----
+  // Semantic event stream instead of stdout-only. Replayable from from_seq.
+  // If not declared, the Controller polls State and synthesizes lifecycle events
+  // from stdout captured as worker.raw (graceful degradation).
+  rpc StreamEvents(StreamEventsRequest) returns (stream EventEnvelope);
+}
+
+// ============================================================================
+// Negotiation
+// ============================================================================
+
+message NegotiateRequest {
+  uint32 adapter_protocol_version = 1;       // wire/protocol version the Controller speaks
+  repeated Capability desired_capabilities = 2; // KANN capabilities the Controller would use
+}
+
+// The shim's declared contract. The MUST verbs are implicit and unconditional;
+// `capabilities` lists ONLY the declared KANN set. Anything absent degrades
+// observability/control — never the fail-closed security floor (Invariant 9).
+message NegotiateResponse {
+  uint32 adapter_protocol_version = 1;
+  repeated Capability capabilities = 2;
+  string worker_kind = 3; // opaque adapter/worker label for diagnostics (NOT a controller special-case)
+}
+
+// ============================================================================
+// Lifecycle MUST verbs
+// ============================================================================
+
+// Create — provision the workcell for an already-created run. The run has been
+// frozen at run.created (Invariant 6): the seed and composed isolation contract
+// are inputs, never re-resolved here. No auto-downgrade: an unsatisfiable
+// isolation contract fails closed (reason=isolation_unsatisfiable), ADR-006 E1.
+message CreateRequest {
+  string run_id = 1;
+  RunSeed seed = 2;                // the frozen seed (ADR-009 R1)
+  IsolationContract isolation = 3; // composed contract; ref-equals seed.isolation_contract_ref
+}
+
+message CreateResponse {
+  string workcell_id = 1;
+  LifecycleStatus status = 2;
+}
+
+message StartRequest {
+  string run_id = 1;
+}
+
+message StartResponse {
+  LifecycleStatus status = 1;
+}
+
+// Adapter-facing signal. Named distinctly from the Command-Plane SignalRequest —
+// this is the inner shim verb, that is the outer consumer verb.
+enum ShimSignal {
+  SHIM_SIGNAL_UNSPECIFIED = 0; // reject
+  SHIM_SIGNAL_CANCEL = 1;      // MUST — universally supported
+  SHIM_SIGNAL_PAUSE = 2;       // KANN — requires CONTROL_PAUSE_RESUME
+  SHIM_SIGNAL_RESUME = 3;      // KANN — requires CONTROL_PAUSE_RESUME
+}
+
+message ShimSignalRequest {
+  string run_id = 1;
+  ShimSignal signal = 2;
+}
+
+// If PAUSE/RESUME was requested without the capability, `degraded_to_boundary`
+// signals the fallback to workcell-boundary freeze (ADR-008 E2) — success, not
+// error; the paused overlay still holds tier-independently.
+message ShimSignalResponse {
+  LifecycleStatus status = 1;
+  bool degraded_to_boundary = 2;
+}
+
+message StateRequest {
+  string run_id = 1;
+}
+
+// Returns the projected lifecycle status: top-state + suspension overlay +
+// terminal (when terminal). paused is never a state, only an overlay (Invariant 8).
+message StateResponse {
+  LifecycleStatus status = 1;
+}
+
+// Reap — teardown for ANY terminal state incl. crash. Triggers Secret-Broker
+// lease revocation (ADR-006 E5). Returns the final terminal state + reason.
+message ReapRequest {
+  string run_id = 1;
+}
+
+message ReapResponse {
+  Termination termination = 1;
+}
+
+// ============================================================================
+// Artifacts MUST verb — workbench diff + manifest + terminal state + reason.
+// Reuses the shared projection shapes from common.proto (defined once).
+// ============================================================================
+message ArtifactsRequest {
+  string run_id = 1;
+}
+
+message ArtifactsResponse {
+  ArtifactManifest manifest = 1;   // pointer-only entries (Invariant 4)
+  WorkbenchDiff workbench_diff = 2; // fold over events, not a live FS read (Invariant 2 / ADR-006 E4)
+  Termination termination = 3;      // completed/failed/canceled + reason (Invariant 8)
+}
+
+// ============================================================================
+// events.stream KANN verb
+// ============================================================================
+message StreamEventsRequest {
+  string run_id = 1;
+  uint64 from_seq = 2; // replay from this seq; at-least-once + seq-idempotent
+}

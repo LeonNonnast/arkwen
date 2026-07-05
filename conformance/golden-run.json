@@ -1,0 +1,112 @@
+{
+  "vector": "golden-run",
+  "adr": ["ADR-002", "ADR-003", "ADR-004", "ADR-009 R1"],
+  "invariants": [2, 4, 6, 8, 1, 3, 10],
+  "description": "One Production Run driven queued->completed. Proves the append-only stream is the sole truth (monotone unique seq, no mutate events, exactly one legal terminal), the seed is frozen at run.created, every content-bearing payload is a ContentRef pointer, and paused never appears as a state.",
+  "conventions": "canonical proto3 JSON (see conformance/README.md); seq/sizeBytes are strings; enums are value names.",
+  "given": {
+    "runId": "run-golden-0001",
+    "stream": [
+      {
+        "runId": "run-golden-0001", "seq": "0", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:00Z", "type": "EVENT_TYPE_RUN_CREATED",
+        "source": {"type": "PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER", "principalId": "consumer-01", "tenantId": "acme"},
+        "emitter": "controller-1",
+        "runCreated": {
+          "createdBy": {"type": "PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER", "principalId": "consumer-01", "tenantId": "acme"},
+          "seed": {
+            "missionHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "9f2c1d7a3e5b8c04f16d2a9b7c3e0d5f8a1b2c3d4e5f60718293a4b5c6d7e8f9"},
+            "imageDigest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "3b0e7c9a1d4f6082b5c7e9a1d3f5072a4c6e8091b3d5f7092a4c6e8b0d2f4a61"},
+            "toolkitVersions": [{"name": "webapp", "digest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "7c1e3a5d7f90b2c4e6081a3c5e7092b4d6f8010293a5c7e9b1d3f507294a6c8e"}}],
+            "workbenchBaseCommit": "e3f1a2b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0",
+            "workbenchSnapshotRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00"},
+            "materializationMode": "MATERIALIZATION_MODE_SNAPSHOT",
+            "adapterVersion": "cell-shim/1.4.2",
+            "policyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff1"},
+            "sessionSeed": "7b1e9f04-2c3a-4d5e-8f60-112233445566",
+            "blueprintDigest": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "dead1234beef5678cafe9abcf00d0def123456789abcdef00fedcba987654321"},
+            "isolationContractRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "5a5b5c5d5e5f60616263646566676869707172737475767778797a7b7c7d7e7f"},
+            "tenantId": "acme",
+            "authzPolicyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "11aa22bb33cc44dd55ee66ff778800aa99bb11cc22dd33ee44ff550066778899"},
+            "egressPolicyHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "e6d5c4b3a29180706f5e4d3c2b1a0918273645acbd9e8f706152433a2b1c0dfe"},
+            "resourceLimitsHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "1234567890abcdeffedcba09876543210a1b2c3d4e5f60718293a4b5c6d7e8f9"},
+            "imageSignatureRef": {"path": "", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "aa11bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900"}, "sizeBytes": "1024", "mimeType": "application/vnd.dev.sigstore.bundle+json", "artifactRef": "cas://sha256/aa11bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900"},
+            "imageProvenanceRef": {"path": "", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900aa11"}, "sizeBytes": "2048", "mimeType": "application/vnd.in-toto+json", "artifactRef": "cas://sha256/bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900aa11"},
+            "secretScopeSetRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "fedcba09876543211234567890abcdef0011aabbccdd22334455eeff66778899"}
+          }
+        }
+      },
+      {
+        "runId": "run-golden-0001", "seq": "1", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:03Z", "type": "EVENT_TYPE_RUN_PROVISIONING",
+        "emitter": "cell-shim-abc",
+        "runProvisioning": {
+          "isolation": {
+            "profile": "ISOLATION_PROFILE_STANDARD",
+            "egress": {"defaultAction": "EGRESS_ACTION_DENY", "allow": [{"host": "api.anthropic.com", "port": 443}], "deny": []},
+            "resourceLimits": {"cpuMillicores": "2000", "memBytes": "2147483648", "diskBytes": "10737418240", "pids": "512", "wallClock": "3600s", "costBudget": {"currency": "USD", "amountMicros": "5000000"}},
+            "imageTrust": {"requireSignature": true, "signatureRef": {"path": "", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "aa11bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900"}, "sizeBytes": "1024", "mimeType": "application/vnd.dev.sigstore.bundle+json", "artifactRef": "cas://sha256/aa11bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900"}, "provenanceRef": {"path": "", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900aa11"}, "sizeBytes": "2048", "mimeType": "application/vnd.in-toto+json", "artifactRef": "cas://sha256/bb22cc33dd44ee55ff6677889900aa11bb22cc33dd44ee55ff6677889900aa11"}},
+            "contractRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "5a5b5c5d5e5f60616263646566676869707172737475767778797a7b7c7d7e7f"}
+          }
+        }
+      },
+      {
+        "runId": "run-golden-0001", "seq": "2", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:07Z", "type": "EVENT_TYPE_RUN_STARTED",
+        "emitter": "cell-shim-abc", "runStarted": {}
+      },
+      {
+        "runId": "run-golden-0001", "seq": "3", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:12Z", "type": "EVENT_TYPE_WORKER_MESSAGE",
+        "emitter": "cell-shim-abc",
+        "workerMessage": {"role": "assistant", "messageRef": {"path": "conversation/0003.txt", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809"}, "sizeBytes": "512", "mimeType": "text/plain", "artifactRef": "cas://sha256/1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809"}}
+      },
+      {
+        "runId": "run-golden-0001", "seq": "4", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:15Z", "type": "EVENT_TYPE_WORKER_TOOL_CALL",
+        "emitter": "cell-shim-abc",
+        "workerToolCall": {"callId": "call-1", "toolName": "fs.write", "argumentsRef": {"path": "toolcalls/call-1.args.json", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a"}, "sizeBytes": "256", "mimeType": "application/json", "artifactRef": "cas://sha256/2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a"}}
+      },
+      {
+        "runId": "run-golden-0001", "seq": "5", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:16Z", "type": "EVENT_TYPE_WORKER_TOOL_RESULT",
+        "emitter": "cell-shim-abc",
+        "workerToolResult": {"callId": "call-1", "ok": true, "resultRef": {"path": "toolcalls/call-1.result.json", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"}, "sizeBytes": "128", "mimeType": "application/json", "artifactRef": "cas://sha256/3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"}}
+      },
+      {
+        "runId": "run-golden-0001", "seq": "6", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:17Z", "type": "EVENT_TYPE_WORKER_ARTIFACT_WRITTEN",
+        "emitter": "cell-shim-abc",
+        "workerArtifactWritten": {"artifactId": "art-1", "artifact": {"path": "src/index.ts", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"}, "sizeBytes": "2048", "mimeType": "text/typescript", "artifactRef": "cas://sha256/4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"}}
+      },
+      {
+        "runId": "run-golden-0001", "seq": "7", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:20Z", "type": "EVENT_TYPE_HEARTBEAT",
+        "emitter": "cell-shim-abc", "heartbeat": {}
+      },
+      {
+        "runId": "run-golden-0001", "seq": "8", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:22Z", "type": "EVENT_TYPE_WORKER_RAW",
+        "emitter": "cell-shim-abc",
+        "workerRaw": {"channel": "stdout", "rawRef": {"path": "raw/stdout.log", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"}, "sizeBytes": "4096", "mimeType": "text/plain", "artifactRef": "cas://sha256/5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"}}
+      },
+      {
+        "runId": "run-golden-0001", "seq": "9", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:00:25Z", "type": "EVENT_TYPE_RUN_FINISHED",
+        "emitter": "cell-shim-abc",
+        "runFinished": {"termination": {"state": "TERMINAL_STATE_COMPLETED", "reason": "TERMINAL_REASON_COMPLETED_OK", "detail": "run completed; 1 artifact written"}}
+      }
+    ]
+  },
+  "assertions": [
+    {"id": "G1", "invariant": [2], "assert": "stream[].seq parsed as uint64 is strictly increasing, unique, starts at 0, and is contiguous 0..9; UNIQUE(runId, seq) holds", "expect": "pass"},
+    {"id": "G2", "invariant": [2], "assert": "no envelope has an EventType in {update,delete,edit,tombstone} (none exist in the taxonomy) and no payload carries a revision/deleted field; exactly one EVENT_TYPE_RUN_FINISHED exists and it is the last element", "expect": "pass"},
+    {"id": "G3", "invariant": [2], "assert": "for every envelope: runId == 'run-golden-0001', schemaVersion >= 1, timestamp present, type != EVENT_TYPE_UNSPECIFIED, and the populated payload oneof case matches type", "expect": "pass"},
+    {"id": "G4", "invariant": [6], "assert": "stream[0].type == EVENT_TYPE_RUN_CREATED and runCreated.seed has all fields populated (missionHash, imageDigest, toolkitVersions, workbenchSnapshotRef, materializationMode, adapterVersion, policyVersion, sessionSeed, blueprintDigest, isolationContractRef, tenantId, authzPolicyVersion, egressPolicyHash, resourceLimitsHash, imageSignatureRef, imageProvenanceRef, secretScopeSetRef); no later event re-carries or mutates seed", "expect": "pass"},
+    {"id": "G5", "invariant": [4], "assert": "every content-bearing field (workerMessage.messageRef, workerToolCall.argumentsRef, workerToolResult.resultRef, workerArtifactWritten.artifact, workerRaw.rawRef) is a ContentRef with a contentHash; no payload contains an inline content/bytes field (structural: the arkwen.v1 descriptor set declares no bytes content field)", "expect": "pass"},
+    {"id": "G6", "invariant": [8], "assert": "no envelope encodes a 'paused' lifecycle state (LifecycleState has no PAUSED member); the terminal is runFinished.termination.state == TERMINAL_STATE_COMPLETED, which is in {COMPLETED,FAILED,CANCELED}", "expect": "pass"},
+    {"id": "G7", "invariant": [3], "assert": "a EVENT_TYPE_WORKER_RAW event is present with a rawRef pointer (durable sanitized raw is not dropped)", "expect": "pass"},
+    {"id": "G8", "invariant": [6], "assert": "runProvisioning.isolation.contractRef.hex == runCreated.seed.isolationContractRef.hex (provisioning re-verifies the frozen contract, never re-resolves)", "expect": "pass"},
+    {"id": "G9", "invariant": [1, 10], "assert": "source/emitter carry only Principal(type,principalId,tenantId) and an opaque emitter string; no envelope or seed field contains a consumer product name or a *_url/callback field (structural)", "expect": "pass"}
+  ]
+}

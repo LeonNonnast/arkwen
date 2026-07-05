@@ -1,0 +1,501 @@
+// Arkwen wire contract — SHARED TYPES.
+//
+// This file is the single source of truth for every type reused across the
+// adapter (inner, Cell-Shim <-> Controller) and the control plane (outer,
+// consumer <-> Controller). It is imported by events.proto, adapter.proto and
+// control_plane.proto. Nothing here is defined twice anywhere else.
+//
+// ============================================================================
+// PACKAGE-WIDE CONVENTIONS (these ENCODE the ten Arkwen invariants)
+// ============================================================================
+//
+// FAIL-CLOSED ENUMS (Invariant 7 · ADR-005/006/010).
+//   Every enum's value 0 is the most-restrictive / deny / reject reading.
+//   - Where a concrete restrictive value exists, it IS 0
+//     (TIMEOUT_POLICY_FAIL_CLOSED = 0, EGRESS_ACTION_DENY = 0,
+//      AUTHZ_OUTCOME_DENY = 0, MATERIALIZATION_MODE_SNAPSHOT = 0).
+//   - Where 0 is an *_UNSPECIFIED sentinel (proto3 hygiene / open sets), it MUST
+//     be resolved to the most-restrictive concrete behaviour: validators REJECT
+//     it, projections read it as deny/fail — never as allow/approve/looser.
+//   - Ascending numeric order additionally encodes strictness lattices where one
+//     exists (ISOLATION_PROFILE standard<hardened<strict), so policy composition
+//     across layers = max() and can never downgrade.
+//
+// POINTER-ONLY (Invariant 4 · ADR-002/004).
+//   There is deliberately NO `bytes` field anywhere in this package for artifact
+//   / material / message / secret CONTENT. Content lives in the content-addressed
+//   store; the wire carries ContentRef / Digest pointers only. This is a
+//   structural guarantee, not a convention — the shape simply cannot carry a blob.
+//
+// SECRET-TIGHTNESS (Invariant 5 · ADR-004/006/010).
+//   No message carries secret material. Secret* events carry lease/scope
+//   metadata only. Principal carries a non-secret id only — auth material is
+//   verified-and-discarded at the boundary (structural exclusion, ADR-010 E7),
+//   never a field here.
+//
+// APPEND-ONLY (Invariant 2 · ADR-002).
+//   There is no Update/Delete/Edit/Tombstone message and no `revision`/`deleted`
+//   field in the entire package. The only operation over truth is append. State
+//   is a projection (LifecycleStatus, ArtifactManifest, ...), never a mutable
+//   record.
+//
+// SEED FREEZE (Invariant 6 · ADR-001/009 R1).
+//   RunSeed is captured once at run.created and never re-resolved.
+
+syntax = "proto3";
+
+package arkwen.v1;
+
+import "google/protobuf/duration.proto";
+
+option go_package = "github.com/arkwen/arkwen/gen/go/arkwen/v1;arkwenv1";
+
+// ============================================================================
+// Content addressing (ADR-004 / ADR-007) — Digest is IDENTITY.
+// ============================================================================
+
+// Digest algorithm. sha256 is the confirmed algorithm; UNSPECIFIED is invalid
+// and MUST be rejected (fail-closed — an unverifiable digest is never trusted).
+enum DigestAlgorithm {
+  DIGEST_ALGORITHM_UNSPECIFIED = 0; // reject: unknown/unverifiable algorithm
+  DIGEST_ALGORITHM_SHA256 = 1;
+}
+
+// A content-addressed digest. In the Warehouse and Artifact Store the digest IS
+// the identity (ADR-007 E2); channels/aliases are movable pointers that resolve
+// to a Digest exactly once at run.created (ADR-009 R1) and are frozen into RunSeed.
+message Digest {
+  DigestAlgorithm algorithm = 1;
+  string hex = 2; // lower-hex encoding of the digest; never the content itself
+}
+
+// ContentRef — THE universal pointer (Invariant 4 · ADR-004 E2).
+// Events, artifacts and materials reference content by pointer; the bytes live
+// in the content-addressed store. There is intentionally no inline-content field.
+// Reused verbatim as the artifact-manifest carrier (ADR-003 Part B).
+message ContentRef {
+  string path = 1;            // logical path inside the workbench (metadata only)
+  Digest content_hash = 2;    // content identity in the CAS
+  uint64 size_bytes = 3;      // metadata
+  string mime_type = 4;       // metadata
+  string artifact_ref = 5;    // opaque CAS locator (ADR-004: path·hash·size·mime·ref)
+}
+
+// ============================================================================
+// Principals & tenancy (ADR-010)
+// ============================================================================
+
+// PrincipalType. External subjects (consumer/operator/automation) are the only
+// ones subject to Contract-Plane AuthZ; CELL_SHIM/SECRET_BROKER are intra-trust
+// internal components (ADR-010 E1) and appear only as event `emitter`s, never as
+// AuthZ subjects. UNSPECIFIED = untrusted => deny (Invariant 7).
+enum PrincipalType {
+  PRINCIPAL_TYPE_UNSPECIFIED = 0;         // untrusted => deny
+  PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER = 1; // machine, consumer-agnostic (Invariant 10)
+  PRINCIPAL_TYPE_OPERATOR = 2;            // human via Control Room
+  PRINCIPAL_TYPE_AUTOMATION = 3;          // CI / automation principal
+  PRINCIPAL_TYPE_CELL_SHIM = 4;           // intra-trust; NOT an external AuthZ subject
+  PRINCIPAL_TYPE_SECRET_BROKER = 5;       // intra-trust; NOT an external AuthZ subject
+}
+
+// Principal — authenticated identity. STRUCTURAL SECRET EXCLUSION (ADR-010 E7):
+// only the non-secret id + type + tenant are fields. No token/credential/key
+// field exists by construction, so it cannot leak into a ledger or the UI
+// (Invariant 5). Consumer-agnostic: carries no consumer NAME (Invariant 10).
+message Principal {
+  PrincipalType type = 1;
+  string principal_id = 2; // non-secret, stable id
+  string tenant_id = 3;    // the one tenant this principal acts within (ADR-010 E2)
+}
+
+// ============================================================================
+// Materials materialization (ADR-004) — snapshot-first, mount-optional.
+// ============================================================================
+
+// How the workbench materials enter the workcell (ADR-004 E1). SNAPSHOT = 0 is
+// the safe, reproducible, snapshot-first default (fail-closed for reproducibility).
+// MOUNT / LIVE_BIND are opt-in, allowed ONLY under isolation_profile=standard +
+// trusted (ADR-006 E4), and are explicitly NOT bit-reproducible (ADR-007 E6).
+enum MaterializationMode {
+  MATERIALIZATION_MODE_SNAPSHOT = 0;  // canonical / reproducible (default)
+  MATERIALIZATION_MODE_MOUNT = 1;     // read-only bind / fast-iterative
+  MATERIALIZATION_MODE_LIVE_BIND = 2; // explicit dev mode
+}
+
+// ============================================================================
+// Reproducibility seed (ADR-001 + 003 + 004 + 006 + 007 + 010) — Invariant 6.
+// ============================================================================
+
+message ToolkitPin {
+  string name = 1;
+  Digest digest = 2; // resolved once at run.created; never a floating alias/range
+}
+
+// RunSeed — the complete, frozen reproducibility record. Captured EXACTLY ONCE
+// at run.created (ADR-009 R1) and never re-resolved; `provisioning` only
+// re-verifies signature/provenance. Every seed field is a resolvable pointer so
+// reproduce(run_id) (ADR-007 E6) can rebuild byte-identical inputs.
+message RunSeed {
+  Digest mission_hash = 1;              // ADR-001/007: content-addressed, secret-free mission body
+  Digest image_digest = 2;             // ADR-001: worker image
+  repeated ToolkitPin toolkit_versions = 3; // ADR-001
+
+  string workbench_base_commit = 4;    // ADR-001/003: git baseline
+  // ADR-003/004: snapshot OR mount, mutually exclusive by construction.
+  // snapshot = reproducible baseline; mount runs are explicitly NOT
+  // bit-reproducible (ADR-007 E6) and only allowed under standard+trusted (ADR-006 E4).
+  oneof workbench_baseline {
+    Digest workbench_snapshot_ref = 5;
+    string workbench_mount_ref = 6;
+  }
+  MaterializationMode materialization_mode = 7; // ADR-004
+
+  string adapter_version = 8;          // ADR-001; Cell-Shim binary is a Warehouse input (ADR-007) => resolvable
+  Digest policy_version = 9;           // ADR-005/007: GATE-SET digest ONLY — never isolation/authz (ADR-009 R2)
+  string session_seed = 10;            // ADR-001: non-determinism axis; consumer-providable (ADR-009 R1)
+  Digest blueprint_digest = 11;        // ADR-007 E3: the single pin-point
+
+  Digest isolation_contract_ref = 12;  // ADR-006/009 R2: OWN field, composed isolation contract — NOT policy_version
+  string tenant_id = 13;               // ADR-010 E2: exactly one tenant, seed-fixed
+  Digest authz_policy_version = 14;    // ADR-010 E8: OWN field, content-addressed — NOT policy_version
+
+  // ADR-006 seed amendment — all refs/hashes, never values (Invariant 5):
+  Digest egress_policy_hash = 15;
+  Digest resource_limits_hash = 16;
+  ContentRef image_signature_ref = 17;   // Sigstore/cosign ref
+  ContentRef image_provenance_ref = 18;  // SLSA/in-toto ref
+  Digest secret_scope_set_ref = 19;      // AUDIT SCOPE of injected secrets — never the secrets
+}
+
+// ============================================================================
+// Lifecycle & terminal state (ADR-003) — Invariant 8.
+// ============================================================================
+
+// Canonical top-level lifecycle state (ADR-003 Part A). `paused` is deliberately
+// NOT a member here — pause is an orthogonal overlay (SuspensionReason), never a
+// state (Invariant 8). completed/failed/canceled are the ONLY terminal members.
+enum LifecycleState {
+  LIFECYCLE_STATE_UNSPECIFIED = 0; // reject
+  LIFECYCLE_STATE_QUEUED = 1;
+  LIFECYCLE_STATE_PROVISIONING = 2;
+  LIFECYCLE_STATE_RUNNING = 3;
+  LIFECYCLE_STATE_FINALIZING = 4;
+  LIFECYCLE_STATE_COMPLETED = 5; // terminal
+  LIFECYCLE_STATE_FAILED = 6;    // terminal
+  LIFECYCLE_STATE_CANCELED = 7;  // terminal
+}
+
+// TerminalState — the CONSTRAINED terminal subset (ADR-003). Used wherever only a
+// terminal outcome is valid (RunFinished, Reap, Artifacts). It STRUCTURALLY
+// excludes running/paused, so a terminal outcome can never be a non-terminal or
+// an overlay value (Invariant 8). UNSPECIFIED on a finished run MUST be read as
+// FAILED and is invalid to emit (fail-closed — never a silent success).
+enum TerminalState {
+  TERMINAL_STATE_UNSPECIFIED = 0; // invalid on a terminal event => treat as FAILED
+  TERMINAL_STATE_COMPLETED = 1;
+  TERMINAL_STATE_FAILED = 2;
+  TERMINAL_STATE_CANCELED = 3;
+}
+
+// TerminalReason — the `reason` that accompanies a TerminalState (ADR-006 adds
+// isolation_unsatisfiable/resource_exhausted; DEGRADED is a RESULT CLASSIFICATION,
+// never a state — ADR-007 E6, Invariant 8).
+enum TerminalReason {
+  TERMINAL_REASON_UNSPECIFIED = 0;
+  TERMINAL_REASON_COMPLETED_OK = 1;
+  TERMINAL_REASON_CANCELED_BY_SIGNAL = 2;
+  TERMINAL_REASON_GATE_REJECTED = 3;
+  TERMINAL_REASON_ISOLATION_UNSATISFIABLE = 4; // ADR-006 E1: no auto-downgrade
+  TERMINAL_REASON_RESOURCE_EXHAUSTED = 5;      // ADR-006 E3: hard ceiling
+  TERMINAL_REASON_WORKER_ERROR = 6;
+  TERMINAL_REASON_ADAPTER_ERROR = 7;
+  TERMINAL_REASON_DEADLINE_EXCEEDED = 8;
+}
+
+// Termination — terminal state + reason, reused by RunFinished, Reap, Artifacts.
+message Termination {
+  TerminalState state = 1;
+  TerminalReason reason = 2;
+  string detail = 3; // human-readable; still passes the redaction guard before persistence
+}
+
+// Orthogonal suspension overlay (ADR-003). NONE=0 is the DERIVED not-suspended
+// reading of the projection — the truth of a suspension is the append-only
+// run.paused control event carrying a non-zero reason, so a zero here can never
+// silently LIFT a real gate (Invariant 2 keeps this fail-closed: absence of the
+// field never removes a pause that exists as an event).
+enum SuspensionReason {
+  SUSPENSION_REASON_NONE = 0;
+  SUSPENSION_REASON_PAUSED_BY_GATE = 1;           // auto check / tool-permission
+  SUSPENSION_REASON_PAUSED_BY_USER = 2;           // human milestone
+  SUSPENSION_REASON_PAUSED_BY_POLICY = 3;         // org/compliance rule
+  SUSPENSION_REASON_PAUSED_BY_RESOURCE_LIMIT = 4; // budget/resource (see ResourceLimitKind)
+}
+
+// R5 (ADR-009): physical org-capped ceiling vs freely topup-able cost budget.
+enum ResourceLimitKind {
+  RESOURCE_LIMIT_KIND_UNSPECIFIED = 0;
+  RESOURCE_LIMIT_KIND_PHYSICAL_RESOURCE_CEILING = 1; // org_cap-bound; NOT topup-able
+  RESOURCE_LIMIT_KIND_COST_BUDGET_EXHAUSTED = 2;     // consumer cost budget; topup via resume
+}
+
+// LifecycleStatus — the `status` projection (ADR-003), also returned by the
+// adapter State verb. Combines top-state + overlay; `termination` is set only
+// when `state` is terminal.
+message LifecycleStatus {
+  LifecycleState state = 1;
+  SuspensionReason suspension_reason = 2;      // overlay, not a state
+  Termination termination = 3;                 // present only when terminal
+  ResourceLimitKind resource_limit_kind = 4;   // set when suspension_reason = paused_by_resource_limit (R5)
+}
+
+// ============================================================================
+// Isolation & resources (ADR-006) — Invariant 7/9: the security floor never
+// degrades silently, only observability does.
+// ============================================================================
+
+// Isolation profiles, linearly ordered standard<hardened<strict (ADR-006 E1).
+// Ascending value = increasing strictness so composition = max(). UNSPECIFIED =>
+// reject at provisioning (reason=isolation_unsatisfiable); NO auto-downgrade.
+enum IsolationProfile {
+  ISOLATION_PROFILE_UNSPECIFIED = 0; // reject (isolation_unsatisfiable)
+  ISOLATION_PROFILE_STANDARD = 1;    // runc, hardened (default per ADR-006)
+  ISOLATION_PROFILE_HARDENED = 2;    // gVisor/runsc
+  ISOLATION_PROFILE_STRICT = 3;      // Firecracker microVM (untrusted/cross-tenant)
+}
+
+// Egress default action. DENY=0: default-deny for ALL profiles (ADR-006 E2).
+enum EgressAction {
+  EGRESS_ACTION_DENY = 0;  // default-deny (fail-closed)
+  EGRESS_ACTION_ALLOW = 1;
+}
+
+message EgressRule {
+  string host = 1; // SNI/hostname; raw-IP is forbidden, DNS controlled (ADR-006 E2)
+  uint32 port = 2;
+}
+
+// EgressPolicy — enforced host-side OUTSIDE the workload trust boundary (ADR-006
+// E2) so a broken-out worker cannot disable it. Effective set is intersection-only
+// across layers; needs are additive, governance ceilings only narrow (Invariant 7).
+message EgressPolicy {
+  EgressAction default_action = 1; // DENY
+  repeated EgressRule allow = 2;
+  repeated string deny = 3;        // explicit denies win
+}
+
+// CostBudget — R5: the consumer's cost budget, topup-able via resume; kept
+// SEPARATE from physical ceilings so a topup never raises the physical org_cap.
+message CostBudget {
+  string currency = 1;
+  uint64 amount_micros = 2;
+}
+
+// ResourceLimits — cgroups v2 physical ceilings (ADR-006 E3), org_cap-bound.
+// cost_budget is the SEPARATE topup-able dimension (R5). wall_clock counts only
+// running time (suspension excluded — a run waiting on a human gate is not killed).
+message ResourceLimits {
+  uint64 cpu_millicores = 1;
+  uint64 mem_bytes = 2;
+  uint64 disk_bytes = 3;
+  uint64 pids = 4;
+  google.protobuf.Duration wall_clock = 5;
+  CostBudget cost_budget = 6; // R5: NOT a physical ceiling
+}
+
+// ImageTrust — provenance dimension (ADR-006 E6), orthogonal to isolation_profile.
+// Composition across layers is OR (any layer requiring signature wins).
+message ImageTrust {
+  bool require_signature = 1;
+  ContentRef signature_ref = 2;  // Sigstore/cosign, ref only
+  ContentRef provenance_ref = 3; // SLSA/in-toto, ref only
+}
+
+// IsolationContract — the VOR-Start dimension-wise composed result (ADR-006 E7),
+// content-addressed as isolation_contract_ref in RunSeed (ADR-009 R2). This is a
+// rule-projection, never mutable state; composition Org>Blueprint>Mission is
+// profile=max, egress=∩, resource=min, image_trust=OR.
+message IsolationContract {
+  IsolationProfile profile = 1;
+  EgressPolicy egress = 2;
+  ResourceLimits resource_limits = 3;
+  ImageTrust image_trust = 4;
+  Digest contract_ref = 5; // == RunSeed.isolation_contract_ref
+}
+
+// ============================================================================
+// Quality gate policy vocabulary (ADR-005 / ADR-007 promotion) — Invariant 7.
+// ============================================================================
+
+// Gate granularity (ADR-005 E1) + promotion scope (ADR-007 E5).
+enum GateScope {
+  GATE_SCOPE_UNSPECIFIED = 0;
+  GATE_SCOPE_ACTION = 1;    // single tool-call / permission
+  GATE_SCOPE_RUN = 2;       // milestone (deploy/merge/export)
+  GATE_SCOPE_PROMOTION = 3; // Warehouse intake (ADR-007), lives in the ledger domain
+}
+
+// One mechanism, swappable resolver (ADR-005 spine). UNSPECIFIED => reject.
+enum ResolverKind {
+  RESOLVER_KIND_UNSPECIFIED = 0;
+  RESOLVER_KIND_AUTO = 1;   // evaluator / check / LLM-judge
+  RESOLVER_KIND_HUMAN = 2;  // travels to Control Room
+}
+
+// Timeout behaviour (ADR-005 E2). FAIL_CLOSED = 0 is the default and the
+// most-restrictive value: an unresolved gate never silently passes; an external
+// (escalate) resolver MUST carry max_wait and inherits fail_closed (ADR-008 E3).
+enum TimeoutPolicy {
+  TIMEOUT_POLICY_FAIL_CLOSED = 0; // default (Invariant 7)
+  TIMEOUT_POLICY_FAIL_OPEN = 1;   // explicit per-gate opt-in only
+}
+
+// Resolution vocabulary (ADR-005 E3). UNSPECIFIED => treated as REJECT
+// (fail-closed) and invalid to emit.
+enum GateDecision {
+  GATE_DECISION_UNSPECIFIED = 0;             // => reject
+  GATE_DECISION_REJECT = 1;
+  GATE_DECISION_APPROVE = 2;
+  GATE_DECISION_APPROVE_WITH_MODIFICATION = 3; // human edits diff / injects guidance
+  GATE_DECISION_ESCALATE = 4;
+}
+
+// Gate/isolation source layer & precedence (ADR-005 E4 / ADR-006 E7). Higher
+// layers may only make things STRICTER (Invariant 7/10). ORG is the non-removable
+// floor; the intrinsic Arkwen floor sits BELOW org and is not expressible here.
+enum PolicyLayerKind {
+  POLICY_LAYER_KIND_UNSPECIFIED = 0;
+  POLICY_LAYER_KIND_ORG = 1;       // non-removable floor (governance-plane owner)
+  POLICY_LAYER_KIND_BLUEPRINT = 2; // may add, never loosen
+  POLICY_LAYER_KIND_MISSION = 3;   // may add, never loosen
+}
+
+// GateRule — the gate as a RULE (ADR-005 "Regel vs Instanz"). The materialized
+// per-run rule set is digested into RunSeed.policy_version. An action-gate becomes
+// an INSTANCE (GateRequested event) at runtime when an event matches applies_to.
+message GateRule {
+  string gate_id = 1;
+  GateScope scope = 2;
+  ResolverKind resolver = 3;
+  TimeoutPolicy timeout_policy = 4;      // default fail_closed
+  google.protobuf.Duration max_wait = 5; // required when an external resolver is used (ADR-008 E3)
+  bool mandatory = 6;
+  string trigger = 7;     // opaque trigger descriptor
+  string applies_to = 8;  // matcher for action-gate instantiation
+  PolicyLayerKind source = 9;
+  ResourceLimitKind resource_limit_kind = 10; // for budget gates (R5)
+}
+
+// ============================================================================
+// Contract-plane AuthZ vocabulary (ADR-010) — Invariant 7.
+// ============================================================================
+
+// Least-privilege permission set (ADR-010 E3). read != write; gates:resolve and
+// policy:set_floor are separate high-trust grants, never implicitly bundled.
+// UNSPECIFIED => deny (default-deny, ADR-010 E5).
+enum Permission {
+  PERMISSION_UNSPECIFIED = 0;        // deny
+  PERMISSION_RUNS_ENQUEUE = 1;
+  PERMISSION_RUNS_READ = 2;          // covers stream:subscribe + get_projection + run-metrics
+  PERMISSION_RUNS_SIGNAL_CANCEL = 3;
+  PERMISSION_RUNS_SIGNAL_PAUSE = 4;
+  PERMISSION_RUNS_SIGNAL_RESUME = 5;
+  PERMISSION_GATES_RESOLVE = 6;
+  PERMISSION_RUNS_REPRIORITIZE = 7;
+  PERMISSION_POLICY_SET_FLOOR = 8;   // sets ONLY the org floor, above the intrinsic floor
+  PERMISSION_WAREHOUSE_PROMOTE = 9;
+}
+
+// AuthZ decision. DENY = 0 (default-deny / fail-closed; ADR-010 E5): a missing or
+// degraded AuthN backend never opens access (Invariant 7).
+enum AuthzOutcome {
+  AUTHZ_OUTCOME_DENY = 0;
+  AUTHZ_OUTCOME_ALLOW = 1;
+}
+
+// ============================================================================
+// Adapter capabilities (ADR-001) — Invariant 9: tiered + graceful degradation.
+// ============================================================================
+
+// Declared KANN capabilities. The MUST lifecycle+artifacts contract is
+// unconditional and NOT listed here. Absence of a capability => graceful
+// degradation of OBSERVABILITY/control fidelity only (e.g. no control.pause_resume
+// => workcell-boundary freeze), NEVER a security-floor downgrade (Invariant 9).
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_EVENTS_STREAM = 1;        // semantic event stream vs stdout-only
+  CAPABILITY_CONTROL_PAUSE_RESUME = 2; // in-worker pause/resume vs boundary freeze
+  CAPABILITY_GATE_INTERACTIVE = 3;     // interactive gate injection
+  CAPABILITY_TOOLS_STRUCTURED = 4;     // structured tool_call/tool_result vs raw
+}
+
+// ============================================================================
+// Projections (ADR-003 Part B + ADR-008 Run-Metrics) — shared shapes returned
+// BOTH by the adapter (shim-computed) and the control-plane GetProjection
+// (controller-folded). Defined once, reused everywhere.
+// ============================================================================
+
+// One artifact in the manifest (ADR-003 Part B). Reuses ContentRef for the
+// pointer fields (path/hash/size/mime/artifact_ref) — pointer-only (Invariant 4).
+message ArtifactEntry {
+  string artifact_id = 1;
+  ContentRef ref = 2;
+  string created_by = 3;
+  uint64 created_at_seq = 4;    // provenance back into the append-only stream
+  uint64 source_event_seq = 5;
+}
+
+// Artifact Manifest projection (fold over worker.artifact_written / tool_result /
+// file-bearing worker.raw).
+message ArtifactManifest {
+  repeated ArtifactEntry entries = 1;
+}
+
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_ADDED = 1;
+  CHANGE_TYPE_MODIFIED = 2;
+  CHANGE_TYPE_DELETED = 3;
+}
+
+message FileChange {
+  string path = 1;
+  ChangeType change_type = 2;
+  Digest content_hash = 3;
+}
+
+// Workbench Diff projection (ADR-003 Part B / ADR-006 E4): delta vs an EXPLICIT
+// baseline. It is a FOLD over events (Invariant 2) — the overlay-upper is the
+// INPUT to artifact events, never a live FS read.
+message WorkbenchDiff {
+  string workbench_base_commit = 1;
+  Digest workbench_snapshot_ref = 2;
+  repeated FileChange changes = 3;
+}
+
+message GateOutcome {
+  string gate_id = 1;
+  GateDecision decision = 2;
+  SuspensionReason reason = 3;
+}
+
+// Renderable Run Summary projection (ADR-003 Part B) — what the Factory Floor shows.
+message RunSummary {
+  repeated string modified_files = 1;
+  string tests_summary = 2;
+  string summary = 3;
+  repeated GateOutcome gate_status = 4;
+  ArtifactManifest final_artifacts = 5;
+}
+
+// Run-Metrics projection (ADR-008 E4 / ADR-003 4th projection): pure fold,
+// best-effort, tier-degrading. Missing signals are ABSENT, never fabricated —
+// Arkwen measures objective signals, the consumer judges.
+message RunMetrics {
+  CostBudget cost = 1;
+  google.protobuf.Duration duration = 2;
+  map<string, int64> suspended_ms_by_reason = 3; // keyed by SuspensionReason name
+  repeated GateOutcome gate_outcomes = 4;
+  Termination terminal = 5;
+  map<string, string> artifact_signals = 6;      // objective signals only
+}

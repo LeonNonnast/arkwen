@@ -1,0 +1,380 @@
+// Arkwen wire contract — EVENT STREAM (ADR-002) + non-run-scoped LEDGERS
+// (ADR-007 E5 / ADR-009 R8 / ADR-010 E7).
+//
+// The append-only event stream IS the run (Invariant 2). This file defines the
+// canonical Envelope, the full taxonomy of payloads, and — as SEPARATE envelope
+// types with their own monotone ledger_seq — the two non-run-scoped truth
+// domains (Warehouse ledger, Control-Plane audit ledger).
+//
+// APPEND-ONLY, STRUCTURALLY (Invariant 2): there is no update/delete/edit message
+// and no revision/tombstone field. Every payload is metadata + ContentRef only
+// (Invariant 4) and carries no secret material (Invariant 5).
+
+syntax = "proto3";
+
+package arkwen.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "arkwen/v1/common.proto";
+
+option go_package = "github.com/arkwen/arkwen/gen/go/arkwen/v1;arkwenv1";
+
+// ============================================================================
+// Event taxonomy discriminator (ADR-002). Mirrors the oneof payload case; used
+// for indexing/routing/filtering. UNSPECIFIED => reject (fail-closed).
+// ============================================================================
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  // lifecycle
+  EVENT_TYPE_RUN_CREATED = 1;
+  EVENT_TYPE_RUN_PROVISIONING = 2;
+  EVENT_TYPE_RUN_STARTED = 3;
+  EVENT_TYPE_RUN_FINISHED = 4;
+  // semantic
+  EVENT_TYPE_WORKER_MESSAGE = 10;
+  EVENT_TYPE_WORKER_TOOL_CALL = 11;
+  EVENT_TYPE_WORKER_TOOL_RESULT = 12;
+  EVENT_TYPE_WORKER_ARTIFACT_WRITTEN = 13;
+  // control
+  EVENT_TYPE_GATE_REQUESTED = 20;
+  EVENT_TYPE_GATE_RESOLVED = 21;
+  EVENT_TYPE_RUN_PAUSED = 22;
+  EVENT_TYPE_RUN_RESUMED = 23;
+  EVENT_TYPE_RUN_CANCEL_REQUESTED = 24;
+  EVENT_TYPE_RUN_REPRIORITIZED = 25; // ADR-008 E7 (new command => new control event)
+  // health
+  EVENT_TYPE_HEARTBEAT = 30;
+  EVENT_TYPE_RESOURCE_SAMPLE = 31;
+  EVENT_TYPE_ERROR = 32;
+  // security (ADR-004 / ADR-006)
+  EVENT_TYPE_SECRET_LEAK_DETECTED = 40;
+  EVENT_TYPE_REDACTION_APPLIED = 41;
+  EVENT_TYPE_SECRET_LEASED = 42;
+  EVENT_TYPE_SECRET_ROTATED = 43;
+  EVENT_TYPE_SECRET_REVOKED = 44;
+  EVENT_TYPE_EGRESS_DENIED = 45;
+  // fallback (never dropped except redacted secrets — Invariant 3)
+  EVENT_TYPE_WORKER_RAW = 50;
+}
+
+// ============================================================================
+// Event Envelope (ADR-002). Mandatory since day 1: run_id, monotone seq,
+// per-event schema_version, timestamp, type, payload. Persistence enforces
+// UNIQUE(run_id, seq) and append-only (Invariant 2).
+// ============================================================================
+message EventEnvelope {
+  string run_id = 1;
+  uint64 seq = 2;              // monotone per run; the ordering truth (append-only)
+  uint32 schema_version = 3;   // PER EVENT (ADR-002) — the forward-compat axis
+  google.protobuf.Timestamp timestamp = 4;
+  EventType type = 5;          // must match the payload oneof case
+
+  // Optional provenance (ADR-002; ADR-008 E7 / ADR-010: control events carry the
+  // authenticated principal here). `source` is the AuthZ principal that caused a
+  // control event; `emitter` is the intra-trust component that physically emitted
+  // it (e.g. a Cell-Shim instance id). Neither carries a consumer NAME (Invariant 10).
+  Principal source = 6;
+  string emitter = 7;
+  string correlation_id = 8;
+  string causation_id = 9;
+
+  // Exactly one payload. Every payload is pointer/metadata only (Invariant 4);
+  // no branch carries a bytes content field.
+  oneof payload {
+    // lifecycle
+    RunCreated run_created = 100;
+    RunProvisioning run_provisioning = 101;
+    RunStarted run_started = 102;
+    RunFinished run_finished = 103;
+    // semantic
+    WorkerMessage worker_message = 110;
+    WorkerToolCall worker_tool_call = 111;
+    WorkerToolResult worker_tool_result = 112;
+    WorkerArtifactWritten worker_artifact_written = 113;
+    // control
+    GateRequested gate_requested = 120;
+    GateResolved gate_resolved = 121;
+    RunPaused run_paused = 122;
+    RunResumed run_resumed = 123;
+    RunCancelRequested run_cancel_requested = 124;
+    RunReprioritized run_reprioritized = 125;
+    // health
+    Heartbeat heartbeat = 130;
+    ResourceSample resource_sample = 131;
+    ErrorEvent error = 132;
+    // security
+    SecretLeakDetected secret_leak_detected = 140;
+    RedactionApplied redaction_applied = 141;
+    SecretLeased secret_leased = 142;
+    SecretRotated secret_rotated = 143;
+    SecretRevoked secret_revoked = 144;
+    EgressDenied egress_denied = 145;
+    // fallback
+    WorkerRaw worker_raw = 150;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// lifecycle payloads
+// ---------------------------------------------------------------------------
+
+// run.created — THE freeze point (Invariant 6 / ADR-009 R1). Carries the fully
+// resolved, frozen RunSeed. Alias/range->digest resolution has already happened
+// exactly once; nothing here is ever re-resolved.
+message RunCreated {
+  RunSeed seed = 1;
+  Principal created_by = 2; // the authorized enqueue principal (ADR-010)
+}
+
+// run.provisioning — workcell being provisioned; ONLY re-verifies signature/
+// provenance against the frozen seed (ADR-009 R1). No re-resolution.
+message RunProvisioning {
+  IsolationContract isolation = 1; // the composed contract (ADR-006 E7), ref-equals seed
+}
+
+// run.started — worker started inside the workcell.
+message RunStarted {}
+
+// run.finished — the ONLY terminal lifecycle event; terminal state is one of
+// completed/failed/canceled (Invariant 8). `paused` can never appear here.
+message RunFinished {
+  Termination termination = 1;
+}
+
+// ---------------------------------------------------------------------------
+// semantic payloads — pointer-only (Invariant 4)
+// ---------------------------------------------------------------------------
+
+// worker.message — the message body lives in the CAS; the event carries a pointer.
+message WorkerMessage {
+  string role = 1;
+  ContentRef message_ref = 2; // never inline content
+}
+
+// worker.tool_call — MCP/tool invocation; arguments are a pointer, not inline.
+message WorkerToolCall {
+  string call_id = 1;
+  string tool_name = 2;
+  ContentRef arguments_ref = 3;
+}
+
+// worker.tool_result
+message WorkerToolResult {
+  string call_id = 1;
+  bool ok = 2;
+  ContentRef result_ref = 3;
+}
+
+// worker.artifact_written (ADR-003/004) — the artifact-manifest source. Metadata
+// + pointer only; blobs live in the content-addressed Artifact Store.
+message WorkerArtifactWritten {
+  string artifact_id = 1;
+  ContentRef artifact = 2; // path·content_hash·size·mime·artifact_ref
+}
+
+// ---------------------------------------------------------------------------
+// control payloads — each corresponds 1:1 to a Command-Plane op (ADR-008 E7)
+// ---------------------------------------------------------------------------
+
+// gate.requested (ADR-005). Born identically regardless of resolver. For budget
+// gates it carries the R5 limit identity + the applicable ceiling so the consumer
+// can distinguish a physical org_cap from a topup-able cost budget.
+message GateRequested {
+  GateRule gate = 1;                     // the instantiated rule (scope/resolver/timeout/max_wait)
+  SuspensionReason suspension_reason = 2; // the pause this gate induces (ADR-003 mapping)
+  ResourceLimitKind resource_limit_kind = 3; // R5: physical ceiling vs cost budget
+  ResourceLimits applicable_ceiling = 4;     // R5: which ceiling applies (topup target if cost)
+  ContentRef context_ref = 5;            // optional evaluator context, pointer-only
+}
+
+// gate.resolved (ADR-005 E3) — callback-free audit trail. resolution_payload
+// (e.g. an approve_with_modification diff) is a POINTER, never inline.
+message GateResolved {
+  string gate_id = 1;
+  Principal resolved_by = 2;
+  GateDecision decision = 3;
+  string rationale = 4;                 // human text; still passes the redaction guard
+  ContentRef resolution_payload_ref = 5; // modified diff / injected guidance, pointer-only
+}
+
+// run.paused — overlay, NOT a terminal (Invariant 8). Carries the reason; for
+// resource pauses, the R5 limit identity + applicable ceiling.
+message RunPaused {
+  SuspensionReason reason = 1;
+  ResourceLimitKind resource_limit_kind = 2; // R5
+  ResourceLimits applicable_ceiling = 3;      // R5: cost budget is the only topup-able one
+}
+
+// run.resumed — resumes from suspension. A resume MAY carry a cost-budget topup
+// that raises ONLY the consumer cost budget, never the physical org_cap (R5).
+message RunResumed {
+  Principal resumed_by = 1;
+  CostBudget cost_budget_topup = 2; // R5: cost only
+}
+
+// run.cancel_requested — cancel is the universal MUST signal (ADR-001/008).
+message RunCancelRequested {
+  Principal requested_by = 1;
+}
+
+// run.reprioritized (ADR-008 E7) — only meaningful while queued; queue ordering
+// remains a projection (Invariant 2), never mutable state. Inputs unchanged (R1).
+message RunReprioritized {
+  Principal requested_by = 1;
+  int32 new_priority = 2;
+}
+
+// ---------------------------------------------------------------------------
+// health payloads
+// ---------------------------------------------------------------------------
+
+message Heartbeat {}
+
+// resource.sample (ADR-006 E3) — cgroups v2 usage snapshot. Metadata only.
+message ResourceSample {
+  uint64 cpu_millicores = 1;
+  uint64 mem_bytes = 2;
+  uint64 disk_bytes = 3;
+  uint64 pids = 4;
+  google.protobuf.Duration wall_clock_running = 5; // running time only (suspension excluded)
+}
+
+message ErrorEvent {
+  string code = 1;
+  string message = 2;   // passes the redaction guard before persistence
+  ContentRef detail_ref = 3;
+}
+
+// ---------------------------------------------------------------------------
+// security payloads (ADR-004 / ADR-006) — METADATA ONLY, never values (Invariant 5)
+// ---------------------------------------------------------------------------
+
+// security.secret_leak_detected — a leak was caught before persistence. Records
+// where, never what. The leaked value is redacted and never a field.
+message SecretLeakDetected {
+  string channel = 1;    // stdout|stderr|file-event
+  uint32 match_count = 2;
+}
+
+// security.redaction_applied — redaction accounting.
+message RedactionApplied {
+  string channel = 1;
+  uint32 redaction_count = 2;
+  string rule_id = 3; // which redaction-list rule matched — never the matched value
+}
+
+// security.secret_leased (ADR-006 E5) — Secret-Broker minted a scoped ephemeral
+// handle. Scope ref + expiry only; NEVER the credential.
+message SecretLeased {
+  string lease_id = 1;
+  Digest secret_scope_ref = 2; // audit scope, not the secret
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message SecretRotated {
+  string lease_id = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// security.secret_revoked — revocation at reap for ANY terminal state incl. crash.
+message SecretRevoked {
+  string lease_id = 1;
+  string reason = 2;
+}
+
+// security.egress_denied (ADR-006 E2) — host/SNI redacted + length-bounded.
+message EgressDenied {
+  string host_sni_redacted = 1; // redacted + length-bounded (never full raw target)
+  string reason = 2;
+}
+
+// ---------------------------------------------------------------------------
+// fallback payload
+// ---------------------------------------------------------------------------
+
+// worker.raw = durable SANITIZED raw (ADR-002/004). Never dropped — fidelity is
+// preserved with exactly one intentional exception: redacted secrets (Invariant 3).
+// The raw text lives in the CAS AFTER redaction; the event carries a pointer.
+message WorkerRaw {
+  string channel = 1;      // stdout|stderr|native
+  ContentRef raw_ref = 2;  // sanitized raw blob, pointer-only
+}
+
+// ============================================================================
+// NON-RUN-SCOPED LEDGERS — separate append-only truth domains, disjoint from the
+// run stream (ADR-009 R8). Each has its OWN monotone ledger_seq, NOT run_id/seq.
+// ============================================================================
+
+// Warehouse provenance ledger (ADR-007 E5 / ADR-009 R8). Keyed on digest/channel.
+// Warehouse mutations are append-only; channel->digest is a projection (Invariant 2).
+message WarehouseLedgerEnvelope {
+  uint64 ledger_seq = 1;      // monotone, UNIQUE(ledger_seq) — NOT run_id/seq
+  uint32 schema_version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  Principal source = 4;       // requires warehouse:promote (ADR-010 E3)
+
+  oneof entry {
+    WarehouseIntakeRequested intake_requested = 100;
+    WarehouseIntakeResolved intake_resolved = 101;
+    ChannelPointerMoved channel_pointer_moved = 102;
+  }
+}
+
+// Reuses the ADR-005 gate spine with scope=promotion over the Warehouse ledger.
+message WarehouseIntakeRequested {
+  GateRule gate = 1;   // gate.scope MUST be GATE_SCOPE_PROMOTION
+  Digest subject = 2;  // the blob/blueprint being promoted (identity = digest)
+  string channel = 3;  // target channel (dev/tested/released)
+}
+
+message WarehouseIntakeResolved {
+  string gate_id = 1;
+  Principal resolved_by = 2;
+  GateDecision decision = 3;
+  Digest subject = 4;
+  string rationale = 5;
+}
+
+// A movable channel pointer being repointed to a digest (ADR-007 E2).
+message ChannelPointerMoved {
+  string channel = 1;
+  Digest from_digest = 2;
+  Digest to_digest = 3;
+}
+
+// Control-Plane audit ledger (ADR-010 E7 / ADR-009 R8-pattern). Keyed principal/time.
+// SECRET-TIGHTNESS = STRUCTURAL EXCLUSION at the AuthN boundary (ADR-010 E7): AuthN
+// material is verified-and-discarded; only non-secret principal id + decision +
+// content-addressed scope refs are ever fields. This is the Contract-Plane's OWN
+// persistence guard, SEPARATE from Cell-Shim redaction (Invariant 5 + 1). Denials
+// live ONLY here and NEVER fabricate run-stream events (Invariant 2).
+message ControlPlaneAuditLedgerEnvelope {
+  uint64 ledger_seq = 1;      // monotone, UNIQUE(ledger_seq) — NOT run_id/seq
+  uint32 schema_version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  Principal principal = 4;    // non-secret id only (structural exclusion)
+
+  oneof entry {
+    AuthDecision auth_decision = 100;
+    FloorChanged floor_changed = 101;
+  }
+}
+
+// An AuthN/AuthZ decision (especially a denial). run_id is only a SCOPE REF when
+// the call had one (a rejected enqueue has none). No auth material fields exist.
+message AuthDecision {
+  Permission permission = 1;
+  AuthzOutcome outcome = 2;     // DENY = 0 (default-deny, fail-closed)
+  string run_id = 3;            // scope ref only; empty for run-less calls
+  Digest authz_policy_version = 4; // the grant-set in effect (ADR-010 E8)
+  string reason = 5;
+}
+
+// policy:set_floor (ADR-010 E3). Sets ONLY the org floor, which sits strictly
+// ABOVE the non-removable intrinsic Arkwen floor. Ledger-tracked => projection
+// (Invariant 2), seed-fixed per run.
+message FloorChanged {
+  Digest new_floor_ref = 1;         // content-addressed floor policy
+  Digest authz_policy_version = 2;
+}

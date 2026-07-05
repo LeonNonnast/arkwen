@@ -1,0 +1,86 @@
+{
+  "vector": "fail-closed",
+  "adr": ["ADR-005 E2", "ADR-006 E1", "ADR-008 E3", "ADR-010 E5/E6"],
+  "invariants": [7, 10, 2, 8],
+  "description": "Every open question resolves to the restrictive reading. (a) An unresolved mandatory gate under the default fail_closed timeout policy terminates the run failed (never silently approves). (b) A command lacking its grant, and an Enqueue whose RunSpec would LOOSEN the floor, are DENIED; the denial lives ONLY in the Control-Plane audit ledger and never fabricates a run-stream event. (c) Cross-tenant access is default-deny and cross-tenant co-residency forces isolation_profile >= strict, with no auto-downgrade.",
+  "conventions": "canonical proto3 JSON. 'mustReject' entries must fail enqueue/validation. enum-0 restrictiveness is asserted globally at the end.",
+  "given": {
+    "scenario_a_unresolved_gate": {
+      "gateRequested": {
+        "runId": "run-fc-a", "seq": "5", "schemaVersion": 1, "timestamp": "2026-07-05T09:20:00Z", "type": "EVENT_TYPE_GATE_REQUESTED", "emitter": "controller-1",
+        "gateRequested": {
+          "gate": {"gateId": "g-deploy", "scope": "GATE_SCOPE_RUN", "resolver": "RESOLVER_KIND_HUMAN", "timeoutPolicy": "TIMEOUT_POLICY_FAIL_CLOSED", "maxWait": "3600s", "mandatory": true, "trigger": "pre-deploy", "appliesTo": "deploy", "source": "POLICY_LAYER_KIND_ORG"},
+          "suspensionReason": "SUSPENSION_REASON_PAUSED_BY_GATE"
+        }
+      },
+      "runPaused": {
+        "runId": "run-fc-a", "seq": "6", "schemaVersion": 1, "timestamp": "2026-07-05T09:20:00Z", "type": "EVENT_TYPE_RUN_PAUSED", "emitter": "controller-1",
+        "runPaused": {"reason": "SUSPENSION_REASON_PAUSED_BY_GATE"}
+      },
+      "timeoutElapsedNoResolution": true,
+      "expectedTermination": {
+        "runId": "run-fc-a", "seq": "7", "schemaVersion": 1, "timestamp": "2026-07-05T10:20:00Z", "type": "EVENT_TYPE_RUN_FINISHED", "emitter": "controller-1",
+        "runFinished": {"termination": {"state": "TERMINAL_STATE_FAILED", "reason": "TERMINAL_REASON_GATE_REJECTED", "detail": "gate g-deploy timed out under fail_closed after max_wait"}}
+      },
+      "unspecifiedDecisionIsReject": {"decision": "GATE_DECISION_UNSPECIFIED", "readAs": "GATE_DECISION_REJECT"}
+    },
+    "scenario_b_missing_grant": {
+      "resolveGateByUngrantedPrincipal": {
+        "request": {"runId": "run-fc-b", "gateId": "g-deploy", "decision": "GATE_DECISION_APPROVE", "rationale": "looks fine"},
+        "principal": {"type": "PRINCIPAL_TYPE_OPERATOR", "principalId": "op-nobody", "tenantId": "acme"},
+        "grantsHeld": ["PERMISSION_RUNS_READ"]
+      },
+      "expectedAuditLedgerEntry": {
+        "ledgerSeq": "101", "schemaVersion": 1, "timestamp": "2026-07-05T09:21:00Z",
+        "principal": {"type": "PRINCIPAL_TYPE_OPERATOR", "principalId": "op-nobody", "tenantId": "acme"},
+        "authDecision": {"permission": "PERMISSION_GATES_RESOLVE", "outcome": "AUTHZ_OUTCOME_DENY", "runId": "run-fc-b", "authzPolicyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "11aa22bb33cc44dd55ee66ff778800aa99bb11cc22dd33ee44ff550066778899"}, "reason": "missing grant gates:resolve"}
+      },
+      "mustReject_enqueue_loosening_floor": {
+        "description": "Mission layer tries to loosen the org floor: org mandates isolation profile_floor HARDENED, mission asks for STANDARD; and org mandates a fail_closed gate that mission flips to fail_open.",
+        "enqueueRequest": {
+          "runSpec": {
+            "missionRef": {"path": "mission.md", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "9f2c1d7a3e5b8c04f16d2a9b7c3e0d5f8a1b2c3d4e5f60718293a4b5c6d7e8f9"}, "sizeBytes": "1000", "mimeType": "text/markdown", "artifactRef": "cas://sha256/9f2c1d7a3e5b8c04f16d2a9b7c3e0d5f8a1b2c3d4e5f60718293a4b5c6d7e8f9"},
+            "blueprintRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "dead1234beef5678cafe9abcf00d0def123456789abcdef00fedcba987654321"},
+            "tenantId": "acme",
+            "materializationMode": "MATERIALIZATION_MODE_SNAPSHOT",
+            "policyBundle": {
+              "org": {"layer": "POLICY_LAYER_KIND_ORG", "gates": [{"gateId": "g-deploy", "scope": "GATE_SCOPE_RUN", "resolver": "RESOLVER_KIND_HUMAN", "timeoutPolicy": "TIMEOUT_POLICY_FAIL_CLOSED", "maxWait": "3600s", "mandatory": true, "source": "POLICY_LAYER_KIND_ORG"}], "isolation": {"profileFloor": "ISOLATION_PROFILE_HARDENED", "egress": {"defaultAction": "EGRESS_ACTION_DENY", "allow": [], "deny": []}}},
+              "mission": {"layer": "POLICY_LAYER_KIND_MISSION", "gates": [{"gateId": "g-deploy", "scope": "GATE_SCOPE_RUN", "resolver": "RESOLVER_KIND_HUMAN", "timeoutPolicy": "TIMEOUT_POLICY_FAIL_OPEN", "mandatory": false, "source": "POLICY_LAYER_KIND_MISSION"}], "isolation": {"profileFloor": "ISOLATION_PROFILE_STANDARD", "egress": {"defaultAction": "EGRESS_ACTION_ALLOW", "allow": [], "deny": []}}}
+            }
+          },
+          "idempotencyKey": "idem-fc-b"
+        },
+        "expectedResult": {"grpcError": true, "runId": "", "auditLedgerOnly": true}
+      }
+    },
+    "scenario_c_cross_tenant": {
+      "targetRun": {"runId": "run-fc-c", "tenantId": "beta"},
+      "callerPrincipal": {"type": "PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER", "principalId": "consumer-alpha", "tenantId": "alpha"},
+      "subscribeAttempt": {"runId": "run-fc-c", "fromSeq": "0"},
+      "expectedAuditLedgerEntry": {
+        "ledgerSeq": "102", "schemaVersion": 1, "timestamp": "2026-07-05T09:22:00Z",
+        "principal": {"type": "PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER", "principalId": "consumer-alpha", "tenantId": "alpha"},
+        "authDecision": {"permission": "PERMISSION_RUNS_READ", "outcome": "AUTHZ_OUTCOME_DENY", "runId": "run-fc-c", "authzPolicyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "11aa22bb33cc44dd55ee66ff778800aa99bb11cc22dd33ee44ff550066778899"}, "reason": "cross-tenant default-deny (caller tenant alpha != run tenant beta)"}
+      },
+      "coResidencyRule": {"crossTenantCoResidency": true, "requiredProfileAtLeast": "ISOLATION_PROFILE_STRICT", "ifHostCannotSatisfy": {"type": "EVENT_TYPE_RUN_FINISHED", "runFinished": {"termination": {"state": "TERMINAL_STATE_FAILED", "reason": "TERMINAL_REASON_ISOLATION_UNSATISFIABLE"}}}}
+    },
+    "enumZeroRestrictiveness": {
+      "TIMEOUT_POLICY_UNSPECIFIED_absent": "unset timeoutPolicy == TIMEOUT_POLICY_FAIL_CLOSED (value 0)",
+      "GATE_DECISION_UNSPECIFIED": "read as REJECT",
+      "AUTHZ_OUTCOME_UNSPECIFIED_absent": "unset outcome == AUTHZ_OUTCOME_DENY (value 0)",
+      "EGRESS_ACTION_unset": "== EGRESS_ACTION_DENY (value 0)",
+      "ISOLATION_PROFILE_UNSPECIFIED": "reject / isolation_unsatisfiable, never allow",
+      "TERMINAL_STATE_UNSPECIFIED": "read as FAILED, invalid to emit"
+    }
+  },
+  "assertions": [
+    {"id": "F1", "invariant": [7], "assert": "scenario_a: with timeoutPolicy TIMEOUT_POLICY_FAIL_CLOSED and no gate.resolved before max_wait, the run terminates TERMINAL_STATE_FAILED with reason TERMINAL_REASON_GATE_REJECTED — an unresolved gate never silently passes", "expect": "pass"},
+    {"id": "F2", "invariant": [7], "assert": "scenario_a: a gate.resolved carrying GATE_DECISION_UNSPECIFIED (value 0) is treated as GATE_DECISION_REJECT", "expect": "pass"},
+    {"id": "F3", "invariant": [7, 2], "assert": "scenario_b: ResolveGate by a principal without PERMISSION_GATES_RESOLVE yields AUTHZ_OUTCOME_DENY recorded ONLY as a ControlPlaneAuditLedgerEnvelope/AuthDecision; NO run-stream event (e.g. gate.resolved) is emitted for the denied call", "expect": "pass"},
+    {"id": "F4", "invariant": [7, 10], "assert": "scenario_b: the enqueue whose mission layer loosens the org floor (isolation profile_floor STANDARD < org HARDENED; gate flipped to fail_open; egress DENY->ALLOW) is REJECTED at Enqueue (grpc error, empty runId); composition is profile=max/egress=intersection/resource=min so a lower layer cannot loosen, and the intrinsic floor is enforced by enqueue-reject, never silent correction", "expect": "reject + auditLedgerOnly"},
+    {"id": "F5", "invariant": [10], "assert": "RunSpec declares no consumer name and no callback/webhook/*_url field (structural): Arkwen never calls out; the dependency is one-way consumer->Arkwen", "expect": "pass"},
+    {"id": "F6", "invariant": [7], "assert": "scenario_c: a runs:read by a principal in tenant 'alpha' against a run in tenant 'beta' yields AUTHZ_OUTCOME_DENY (cross-tenant default-deny); recorded only in the audit ledger", "expect": "pass"},
+    {"id": "F7", "invariant": [7, 8], "assert": "scenario_c: cross-tenant co-residency requires isolation_profile >= ISOLATION_PROFILE_STRICT; if the host cannot satisfy strict, provisioning fails closed with TERMINAL_REASON_ISOLATION_UNSATISFIABLE (a reason on FAILED, never a new state, never an auto-downgrade)", "expect": "pass"},
+    {"id": "F8", "invariant": [7], "assert": "global enum-0 restrictiveness holds: unset TimeoutPolicy==FAIL_CLOSED, GATE_DECISION_UNSPECIFIED->REJECT, unset AuthzOutcome==DENY, unset EgressAction==DENY, ISOLATION_PROFILE_UNSPECIFIED->reject, TERMINAL_STATE_UNSPECIFIED->FAILED", "expect": "pass"}
+  ]
+}

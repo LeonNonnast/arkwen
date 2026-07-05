@@ -1,0 +1,60 @@
+{
+  "vector": "redaction",
+  "adr": ["ADR-004", "ADR-006 E5", "ADR-010 E7"],
+  "invariants": [5, 3],
+  "description": "A known secret is injected and printed by the worker to stdout. The Cell-Shim redacts BEFORE persistence, so the secret literal lands on NO persistent surface (event store, CAS, projections). worker.raw survives with the secret span replaced by a redaction token (Invariant 3). Separately, the Contract-Plane audit ledger uses STRUCTURAL exclusion: the bearer token that authenticated the enqueue call is verified-and-discarded and has no field to live in.",
+  "conventions": "canonical proto3 JSON. The 'cas' map models the persisted content-addressed store keyed by artifactRef; 'transient' models shim-memory pre-redaction and is NEVER persisted.",
+  "given": {
+    "injectedSecret": "sk-live-51H8QeMODEL_API_KEY_do_not_log",
+    "authBearerToken": "Bearer eyJhbGciOiJFUzI1NiJ9.SECRET_SESSION_TOKEN_do_not_log",
+    "transient_shim_memory_pre_redaction": {
+      "stdout": "Calling model API with key sk-live-51H8QeMODEL_API_KEY_do_not_log ... 200 OK"
+    },
+    "persistedStream": [
+      {
+        "runId": "run-redact-1", "seq": "8", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:10:00Z", "type": "EVENT_TYPE_SECRET_LEAK_DETECTED",
+        "emitter": "cell-shim-xyz",
+        "secretLeakDetected": {"channel": "stdout", "matchCount": 1}
+      },
+      {
+        "runId": "run-redact-1", "seq": "9", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:10:00Z", "type": "EVENT_TYPE_REDACTION_APPLIED",
+        "emitter": "cell-shim-xyz",
+        "redactionApplied": {"channel": "stdout", "redactionCount": 1, "ruleId": "model-api-key"}
+      },
+      {
+        "runId": "run-redact-1", "seq": "10", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:10:01Z", "type": "EVENT_TYPE_WORKER_RAW",
+        "emitter": "cell-shim-xyz",
+        "workerRaw": {"channel": "stdout", "rawRef": {"path": "raw/stdout.log", "contentHash": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e"}, "sizeBytes": "58", "mimeType": "text/plain", "artifactRef": "cas://sha256/6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e"}}
+      },
+      {
+        "runId": "run-redact-1", "seq": "11", "schemaVersion": 1,
+        "timestamp": "2026-07-05T09:10:02Z", "type": "EVENT_TYPE_SECRET_LEASED",
+        "emitter": "secret-broker-1",
+        "secretLeased": {"leaseId": "lease-7", "secretScopeRef": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "fedcba09876543211234567890abcdef0011aabbccdd22334455eeff66778899"}, "expiresAt": "2026-07-05T10:10:02Z"}
+      }
+    ],
+    "cas": {
+      "cas://sha256/6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e": "Calling model API with key <redacted:model-api-key> ... 200 OK"
+    },
+    "projections": {
+      "runSummary": {"modifiedFiles": ["src/index.ts"], "testsSummary": "3 passed", "summary": "model API called successfully", "gateStatus": [], "finalArtifacts": {"entries": []}}
+    },
+    "auditLedger": [
+      {
+        "ledgerSeq": "42", "schemaVersion": 1, "timestamp": "2026-07-05T09:09:59Z",
+        "principal": {"type": "PRINCIPAL_TYPE_OUTER_LOOP_CONSUMER", "principalId": "consumer-01", "tenantId": "acme"},
+        "authDecision": {"permission": "PERMISSION_RUNS_ENQUEUE", "outcome": "AUTHZ_OUTCOME_ALLOW", "runId": "run-redact-1", "authzPolicyVersion": {"algorithm": "DIGEST_ALGORITHM_SHA256", "hex": "11aa22bb33cc44dd55ee66ff778800aa99bb11cc22dd33ee44ff550066778899"}, "reason": "grant runs:enqueue present"}
+      }
+    ]
+  },
+  "assertions": [
+    {"id": "R1", "invariant": [5], "assert": "the literal 'sk-live-51H8QeMODEL_API_KEY_do_not_log' appears in ZERO places across serialized persistedStream, every cas value, and every projection", "expect": "0 occurrences"},
+    {"id": "R2", "invariant": [3], "assert": "a EVENT_TYPE_WORKER_RAW event is present; its rawRef resolves in cas to sanitized content that preserves every non-secret byte with only the secret span replaced by '<redacted:model-api-key>' (fidelity preserved, secret excised)", "expect": "present + byte-equal to sanitized"},
+    {"id": "R3", "invariant": [5], "assert": "SecretLeakDetected and RedactionApplied carry only channel/matchCount/redactionCount/ruleId; SecretLeased carries only leaseId + a secretScopeRef Digest + expiresAt (audit scope, never the credential) — structural: these payloads have no field capable of holding the secret value", "expect": "pass"},
+    {"id": "R4", "invariant": [5], "assert": "the literal auth bearer token 'Bearer eyJhbGciOiJFUzI1NiJ9.SECRET_SESSION_TOKEN_do_not_log' appears in ZERO places across the auditLedger; Principal exposes only type/principalId/tenantId and ControlPlaneAuditLedgerEnvelope/AuthDecision declare NO token/credential/key field (structural exclusion at the AuthN boundary — a distinct mechanism from Cell-Shim redaction)", "expect": "0 occurrences + no such field in descriptor"},
+    {"id": "R5", "invariant": [5, 4], "assert": "the arkwen.v1 descriptor set declares no bytes content field on any message — persist-before-redact of raw content is structurally impossible because raw content can only be referenced via a CAS pointer", "expect": "pass"}
+  ]
+}

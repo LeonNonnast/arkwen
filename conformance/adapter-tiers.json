@@ -1,0 +1,92 @@
+{
+  "vector": "adapter-tiers",
+  "adr": ["ADR-001", "ADR-008 E2"],
+  "invariants": [1, 9],
+  "description": "Two adapters negotiate different KANN capability sets. Both satisfy the unconditional MUST contract identically (Invariant 1: the Controller uses only generic verbs; worker_kind is opaque). Missing KANN capabilities degrade OBSERVABILITY/control fidelity only (pause -> boundary freeze; no events.stream -> worker.raw folding), never the security floor (Invariant 9).",
+  "conventions": "canonical proto3 JSON; each interaction lists the expected response per profile. Seeds/isolation identical to golden-run and elided as $SEED/$ISOLATION.",
+  "given": {
+    "mustContractVerbs": ["Create", "Start", "Signal(SHIM_SIGNAL_CANCEL)", "State", "Reap", "Artifacts"],
+    "profiles": {
+      "must_only_observational": {
+        "negotiateResponse": {"adapterProtocolVersion": 1, "capabilities": [], "workerKind": "echo-stub"}
+      },
+      "fully_cooperative": {
+        "negotiateResponse": {"adapterProtocolVersion": 1, "capabilities": ["CAPABILITY_EVENTS_STREAM", "CAPABILITY_CONTROL_PAUSE_RESUME", "CAPABILITY_GATE_INTERACTIVE", "CAPABILITY_TOOLS_STRUCTURED"], "workerKind": "claude-code"}
+      }
+    },
+    "interactions": [
+      {
+        "call": "Negotiate",
+        "request": {"adapterProtocolVersion": 1, "desiredCapabilities": ["CAPABILITY_EVENTS_STREAM", "CAPABILITY_CONTROL_PAUSE_RESUME", "CAPABILITY_GATE_INTERACTIVE", "CAPABILITY_TOOLS_STRUCTURED"]},
+        "expect": {
+          "must_only_observational": {"capabilities": []},
+          "fully_cooperative": {"capabilities": ["CAPABILITY_EVENTS_STREAM", "CAPABILITY_CONTROL_PAUSE_RESUME", "CAPABILITY_GATE_INTERACTIVE", "CAPABILITY_TOOLS_STRUCTURED"]}
+        }
+      },
+      {
+        "call": "Create",
+        "request": {"runId": "run-tier-1", "seed": "$SEED", "isolation": "$ISOLATION"},
+        "expect": {
+          "must_only_observational": {"status": {"state": "LIFECYCLE_STATE_PROVISIONING", "suspensionReason": "SUSPENSION_REASON_NONE"}},
+          "fully_cooperative": {"status": {"state": "LIFECYCLE_STATE_PROVISIONING", "suspensionReason": "SUSPENSION_REASON_NONE"}}
+        }
+      },
+      {
+        "call": "Start",
+        "request": {"runId": "run-tier-1"},
+        "expect": {
+          "must_only_observational": {"status": {"state": "LIFECYCLE_STATE_RUNNING", "suspensionReason": "SUSPENSION_REASON_NONE"}},
+          "fully_cooperative": {"status": {"state": "LIFECYCLE_STATE_RUNNING", "suspensionReason": "SUSPENSION_REASON_NONE"}}
+        }
+      },
+      {
+        "call": "Signal(SHIM_SIGNAL_PAUSE)",
+        "request": {"runId": "run-tier-1", "signal": "SHIM_SIGNAL_PAUSE"},
+        "expect": {
+          "must_only_observational": {"status": {"state": "LIFECYCLE_STATE_RUNNING", "suspensionReason": "SUSPENSION_REASON_PAUSED_BY_USER"}, "degradedToBoundary": true},
+          "fully_cooperative": {"status": {"state": "LIFECYCLE_STATE_RUNNING", "suspensionReason": "SUSPENSION_REASON_PAUSED_BY_USER"}, "degradedToBoundary": false}
+        }
+      },
+      {
+        "call": "Signal(SHIM_SIGNAL_RESUME)",
+        "request": {"runId": "run-tier-1", "signal": "SHIM_SIGNAL_RESUME"},
+        "expect": {
+          "must_only_observational": {"status": {"state": "LIFECYCLE_STATE_RUNNING", "suspensionReason": "SUSPENSION_REASON_NONE"}, "degradedToBoundary": true},
+          "fully_cooperative": {"status": {"state": "LIFECYCLE_STATE_RUNNING", "suspensionReason": "SUSPENSION_REASON_NONE"}, "degradedToBoundary": false}
+        }
+      },
+      {
+        "call": "StreamEvents",
+        "request": {"runId": "run-tier-1", "fromSeq": "0"},
+        "expect": {
+          "must_only_observational": {"available": false, "degradation": "controller polls State and folds stdout captured as worker.raw; semantic events (worker.message/tool_call/tool_result) are ABSENT"},
+          "fully_cooperative": {"available": true, "emits": ["EVENT_TYPE_WORKER_MESSAGE", "EVENT_TYPE_WORKER_TOOL_CALL", "EVENT_TYPE_WORKER_TOOL_RESULT", "EVENT_TYPE_WORKER_ARTIFACT_WRITTEN"]}
+        }
+      },
+      {
+        "call": "Artifacts",
+        "request": {"runId": "run-tier-1"},
+        "expect": {
+          "must_only_observational": {"termination": {"state": "TERMINAL_STATE_COMPLETED", "reason": "TERMINAL_REASON_COMPLETED_OK"}, "manifestNonEmpty": true},
+          "fully_cooperative": {"termination": {"state": "TERMINAL_STATE_COMPLETED", "reason": "TERMINAL_REASON_COMPLETED_OK"}, "manifestNonEmpty": true}
+        }
+      },
+      {
+        "call": "Reap",
+        "request": {"runId": "run-tier-1"},
+        "expect": {
+          "must_only_observational": {"termination": {"state": "TERMINAL_STATE_COMPLETED", "reason": "TERMINAL_REASON_COMPLETED_OK"}},
+          "fully_cooperative": {"termination": {"state": "TERMINAL_STATE_COMPLETED", "reason": "TERMINAL_REASON_COMPLETED_OK"}}
+        }
+      }
+    ]
+  },
+  "assertions": [
+    {"id": "AT1", "invariant": [1], "assert": "both profiles pass the identical MUST suite (Create/Start/Signal(CANCEL)/State/Reap/Artifacts) with identical LifecycleStatus progression and identical terminal state; worker_kind ('echo-stub' vs 'claude-code') is opaque and MUST NOT change which verbs the Controller issues", "expect": "pass"},
+    {"id": "AT2", "invariant": [9], "assert": "SHIM_SIGNAL_CANCEL succeeds on both profiles regardless of declared capabilities (it is the only unconditional MUST signal); PAUSE/RESUME are KANN (require CAPABILITY_CONTROL_PAUSE_RESUME)", "expect": "pass"},
+    {"id": "AT3", "invariant": [9], "assert": "on must_only_observational, Signal(PAUSE) returns ShimSignalResponse.degradedToBoundary == true and status.suspensionReason == SUSPENSION_REASON_PAUSED_BY_USER (the paused OVERLAY still holds via boundary freeze); it is a success, not an error, and status.state stays a non-terminal top-state", "expect": "pass"},
+    {"id": "AT4", "invariant": [9], "assert": "without CAPABILITY_EVENTS_STREAM, StreamEvents is unavailable and observability degrades to worker.raw-only folding; semantic events are ABSENT for must_only yet the run reaches the SAME terminal state and a non-empty Artifact-Manifest as fully_cooperative", "expect": "pass"},
+    {"id": "AT5", "invariant": [9], "assert": "the security floor is identical across tiers: the IsolationContract passed to Create (profile, egress.defaultAction == EGRESS_ACTION_DENY, resourceLimits, imageTrust) and the redaction/seed inputs are byte-identical for both profiles; a missing capability degrades observability/control fidelity ONLY and never lowers the floor", "expect": "pass"},
+    {"id": "AT6", "invariant": [1], "assert": "NegotiateResponse.workerKind never appears in any Controller control-flow branch (grep-gate): no worker-specific symbol drives lifecycle decisions", "expect": "pass"}
+  ]
+}
