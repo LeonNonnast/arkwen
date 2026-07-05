@@ -59,6 +59,8 @@ Der Entwurf ist vollständig in ADRs festgehalten (`docs/adr/`). Alle fünf Phas
 
 Siehe auch [`docs/ARCHITECTURE-OVERVIEW.md`](docs/ARCHITECTURE-OVERVIEW.md), [`docs/PHASE-MAP-CLOSURE.md`](docs/PHASE-MAP-CLOSURE.md) und [`docs/ELIO-reference-consumer.md`](docs/ELIO-reference-consumer.md).
 
+**Implementierung:** [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) — slice-basierter Build-Plan (S0…S6). Vertiefte ADR-Fassungen mit vollen Threat-Models: [`docs/adr/long-form/`](docs/adr/long-form/).
+
 ## Die zehn Invarianten
 
 Als durchgängiger Prüfmaßstab über alle ADRs:
