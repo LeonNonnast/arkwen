@@ -80,4 +80,19 @@ Als durchgängiger Prüfmaßstab über alle ADRs:
 
 ## Status
 
-Konzeptioneller Architektur-Entwurf (ADR-Phase). Noch keine Implementierung.
+Konzeptioneller Architektur-Entwurf abgeschlossen (ADR-001…010) **und** lauffähige
+Referenz-Implementierung der Slices **S0–S6** in Go (`internal/`, `cmd/arkwen`, `test/conformance`).
+Alle 10 Invarianten sind als adversariale Conformance-Tests kodiert und grün.
+
+Bauen/Testen/Ausprobieren: **[`docs/BUILD-AND-RUN.md`](docs/BUILD-AND-RUN.md)** ·
+Status pro Slice: [`docs/IMPLEMENTATION-STATUS.md`](docs/IMPLEMENTATION-STATUS.md) ·
+Deployen: **[`docs/DEPLOY-RAILWAY.md`](docs/DEPLOY-RAILWAY.md)**.
+Kurz: `make demo` (Walking-Skeleton), `make test` (Unit + Conformance), `make serve` (gRPC Contract-Plane),
+`make test-pg` (durabler PostgreSQL-Event-Store, `-race`), `make docker-build` (Deploy-Image).
+
+Ein erster **deploybarer MVP** läuft als ein Container auf Railway: gRPC-Contract-Plane über den
+TCP-Proxy + HTTP-`/healthz` über die Edge (ein `$PORT`, via cmux), **PostgreSQL**-Event-Store bei
+gesetztem `DATABASE_URL` (Drop-in hinter `eventlog.Log`), Command-Plane per Default **sealed** (fail-closed).
+
+Weitere Infra-Backends, die WSL2 nicht bietet (Firecracker/gVisor, Vault, OCI-Warehouse), sind additive
+Implementierungen hinter denselben Interfaces und schließen fail-closed — die Sicherheits-Floor degradiert nie.

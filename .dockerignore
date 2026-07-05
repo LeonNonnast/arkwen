@@ -1,0 +1,45 @@
+# Keep the build context tiny and deterministic. Anything NOT needed to
+# compile ./cmd/arkwen is excluded. Build inputs that MUST stay:
+#   go.mod, go.sum, cmd/, internal/, gen/  (gen/ = committed generated proto Go)
+
+# --- VCS ---
+.git
+.gitignore
+.gitattributes
+
+# --- docs & markdown (not compiled) ---
+docs/
+*.md
+
+# --- contract sources & tooling (gen/ is pre-generated and committed) ---
+proto/
+buf.gen.yaml
+buf.yaml
+conformance/
+Makefile
+
+# --- tests & their fixtures (go build ./cmd/arkwen never needs them) ---
+test/
+
+# --- the build/deploy config itself (never needed inside the image) ---
+Dockerfile
+.dockerignore
+railway.json
+railway.toml
+
+# --- local env, secrets, scratch, editor cruft ---
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+tmp/
+scratch/
+scratchpad/
+dist/
+bin/
+*.out
+coverage.*
+.DS_Store
+.vscode/
+.idea/

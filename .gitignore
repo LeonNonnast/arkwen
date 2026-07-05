@@ -1,0 +1,24 @@
+# Compiled binaries / build output
+/arkwen
+/dist/
+/bin/
+*.exe
+
+# Test & coverage artifacts
+*.out
+coverage.*
+
+# Local env / secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Scratch
+scratch/
+scratchpad/
+tmp/

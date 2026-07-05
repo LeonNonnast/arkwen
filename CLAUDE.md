@@ -9,7 +9,7 @@ A **factory-style runtime for autonomous software work** — it orchestrates iso
 
 **Arkwen is complete standalone.** An outer loop (in our product family: ELIO) is an *optional consumer of a public contract*, never a dependency. No named consumer is baked into the runtime.
 
-**Status:** conceptual design complete (ADR-001…010, all phases closed + reconciled). **Contract-first** phase in progress (`proto/`). **No product code yet.**
+**Status:** conceptual design complete (ADR-001…010, all phases closed + reconciled). **Contract-first** contracts frozen in `proto/`. **Reference runtime implemented** — slices S0–S6 in Go (`internal/`, `cmd/arkwen`, `test/conformance`); all 10 invariants encoded as green adversarial conformance tests. **First deployable MVP** is Railway-ready: one container (cmux = gRPC over TCP-proxy + HTTP `/healthz` over the edge on one `$PORT`), durable **PostgreSQL** event store when `DATABASE_URL` is set (drop-in behind `eventlog.Log`), command plane **sealed** fail-closed on a public bind. Build/run/test: `docs/BUILD-AND-RUN.md`; deploy: `docs/DEPLOY-RAILWAY.md`; per-slice status: `docs/IMPLEMENTATION-STATUS.md`. (`make test` = unit + conformance; `make test-pg` = durable event-store, `-race`.)
 
 One-sentence model: `Mission → Factory Controller → Cell-Shim → Workcell → Event Stream → Projections`
 
